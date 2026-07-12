@@ -17,7 +17,7 @@ from backend.smartseal.tamper_simulator import (
 )
 from frontend.ui_helpers import recommendation_box, render_stat_grid, section_title, status_pill
 
-SEAL_COLOR = {"SEALED": "#2ecc71", "TAMPERED": "#ff4d4f", "IN_TRANSIT": "#3fa9f5"}
+SEAL_COLOR = {"SEALED": "#16a34a", "TAMPERED": "#dc2626", "IN_TRANSIT": "#2563eb"}
 
 
 def _build_map(wagons: list) -> folium.Map:
@@ -29,7 +29,7 @@ def _build_map(wagons: list) -> folium.Map:
     m = folium.Map(location=center, zoom_start=6, tiles="CartoDB dark_matter")
 
     for w in wagons:
-        color = SEAL_COLOR.get(w["seal_status"], "#3fa9f5")
+        color = SEAL_COLOR.get(w["seal_status"], "#2563eb")
         popup = folium.Popup(
             f"<b>{w['wagon_id']}</b><br>{w['commodity']}<br>"
             f"{w['origin']} \u2192 {w['destination']}<br>"
