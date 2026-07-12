@@ -43,12 +43,13 @@ def kpi_card(label: str, value: str, sub: str = "", accent: bool = False) -> str
     """
 
 
-def render_kpi_row(cards: list[tuple[str, str, str, bool]]) -> None:
-    cols = st.columns(len(cards))
-    for col, (label, value, sub, accent) in zip(cols, cards):
-        with col:
-            st.markdown(kpi_card(label, value, sub, accent), unsafe_allow_html=True)
-
+def render_stat_grid(items: list[tuple[str, str, str]]) -> None:
+    """items: list of (label, value, tone) — renders as native
+    Streamlit metric columns for maximum cloud compatibility."""
+    cols = st.columns(min(len(items), 4))
+    for i, (label, value, _tone) in enumerate(items):
+        with cols[i % 4]:
+            st.metric(label=label, value=value)
 
 def status_pill(status: str) -> str:
     mapping = {
