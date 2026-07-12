@@ -36,8 +36,18 @@ import numpy as np
 
 logger = logging.getLogger("railwaybrain.railvision")
 
-FACE_CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-EYE_CASCADE_PATH = cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"
+# Some OpenCV wheel builds (seen on certain cloud servers) don't attach
+# the 'data' submodule to cv2 at import time, even though the underlying
+# .xml files ARE present in the installed package. This defensive lookup
+# tries the normal attribute first, and falls back to building the path
+# directly from cv2's install location if that attribute is missing.
+try:
+    _CV2_DATA_DIR = cv2.data.haarcascades
+except AttributeError:
+    _CV2_DATA_DIR = os.path.join(os.path.dirname(cv2.__file__), "data") + os.sep
+
+FACE_CASCADE_PATH = _CV2_DATA_DIR + "haarcascade_frontalface_default.xml"
+EYE_CASCADE_PATH = _CV2_DATA_DIR + "haarcascade_eye_tree_eyeglasses.xml"
 
 # Thresholds (tuned for demo purposes; documented, not hidden)
 EYE_CLOSURE_WARNING_PCT = 35.0   # % of analysed frames with closed/undetected eyes
@@ -68,6 +78,9 @@ class FatigueResult:
     risk_level: str = "Unable to Assess"
     detection_time: str = ""
     annotated_frame: Optional[np.ndarray] = field(default=None, repr=False)
+    # Per-frame fatigue timeline for video analysis: list of
+    # (frame_number, fatigue_score) so the UI can plot fatigue over time.
+    frame_timeline: list = field(default_factory=list, repr=False)
 
 
 class FatigueEngine:
@@ -163,6 +176,7 @@ class FatigueEngine:
         blink_events = 0
         prev_eyes_open = True
         last_annotated = None
+        timeline: list = []  # (frame_number, per-frame fatigue score)
 
         while analysed < max_frames:
             ret, frame = cap.read()
@@ -178,6 +192,14 @@ class FatigueEngine:
             total_eyes_found += eyes_found
             total_eyes_expected += eyes_expected
             last_annotated = frame
+
+            # Per-frame fatigue score for the timeline chart
+            if faces > 0:
+                frame_closure = 100.0 * (1 - (eyes_found / max(eyes_expected, 1)))
+                frame_fatigue = min(100.0, frame_closure * 1.1)
+            else:
+                frame_fatigue = 0.0
+            timeline.append((frame_idx, round(frame_fatigue, 1)))
 
             eyes_open_now = eyes_found >= max(eyes_expected, 1) * 0.5
             if prev_eyes_open and not eyes_open_now:
@@ -211,6 +233,7 @@ class FatigueEngine:
             risk_level=RISK_LEVEL_LABELS.get(status, "Unable to Assess"),
             detection_time=datetime.now().strftime("%d %b %Y, %H:%M:%S"),
             annotated_frame=last_annotated,
+            frame_timeline=timeline,
         )
 
     # ------------------------------------------------------------------ #
