@@ -51,6 +51,12 @@ def render_stat_grid(items: list[tuple[str, str, str]]) -> None:
         with cols[i % 4]:
             st.metric(label=label, value=value)
 
+ def render_kpi_row(cards: list[tuple[str, str, str, bool]]) -> None:
+    cols = st.columns(len(cards))
+    for col, (label, value, sub, accent) in zip(cols, cards):
+        with col:
+            st.markdown(kpi_card(label, value, sub, accent), unsafe_allow_html=True)
+
 def status_pill(status: str) -> str:
     mapping = {
         "SAFE": "rb-pill-safe", "LOW": "rb-pill-low",
