@@ -20,6 +20,11 @@ from backend.tracksentinel.crack_growth_model import (
     analyse_uploaded_csv,
     generate_synthetic_inspection_history,
 )
+from backend.tracksentinel.ml_predictor import (
+    predict_next_crack,
+    model_info,
+    fit_empirical_growth_rate,
+)
 from frontend.ui_helpers import gauge_chart, recommendation_box, render_stat_grid, section_title, status_pill
 
 
@@ -79,7 +84,7 @@ def render() -> None:
             with gcol:
                 st.markdown('<div class="rb-gauge-wrap">', unsafe_allow_html=True)
                 st.plotly_chart(
-                    gauge_chart(result.risk_score, "Risk Score", color="#ff7a1a"),
+                    gauge_chart(result.risk_score, "Risk Score", color="#ea580c"),
                     width="stretch",
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -112,15 +117,76 @@ def render() -> None:
                 labels={"mgt_cumulative": "Cumulative MGT", "crack_length_mm": "Crack length (mm)"},
             )
             critical = RAIL_GRADE_CONSTANTS[rail_grade]["critical_length_mm"]
-            fig.add_hline(y=critical, line_dash="dash", line_color="#ff4d4f",
+            fig.add_hline(y=critical, line_dash="dash", line_color="#dc2626",
                            annotation_text="Critical length")
-            fig.update_traces(line_color="#ff7a1a", marker_color="#ff7a1a")
+            fig.update_traces(line_color="#ea580c", marker_color="#ea580c")
             fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#e7ecf5", xaxis=dict(gridcolor="#22304f"), yaxis=dict(gridcolor="#22304f"),
+                font_color="#1e293b", xaxis=dict(gridcolor="#dbe3ec"), yaxis=dict(gridcolor="#dbe3ec"),
             )
             st.plotly_chart(fig, width="stretch")
             st.dataframe(history_df, width="stretch", hide_index=True)
+
+            # ---- Physics vs ML comparison (trained RandomForest) --------
+            section_title("Physics vs Machine Learning \u2014 Cross-Check")
+            st.caption(
+                "The physics model (Paris Law) says what SHOULD happen from material "
+                "constants. The ML model (a RandomForest trained on multi-cycle histories) "
+                "says what the DATA pattern suggests. When they agree, confidence is high; "
+                "when they diverge, that track deserves a closer look."
+            )
+
+            # Empirical growth rate from the FULL history (run-on-run analysis)
+            empirical_rate = fit_empirical_growth_rate(history_df)
+            prev_rate = empirical_rate if empirical_rate is not None else None
+
+            ml = predict_next_crack(
+                float(latest["crack_length_mm"]), rail_grade,
+                prev_growth_rate=prev_rate, mgt_step=10.0,
+            )
+
+            mcol1, mcol2 = st.columns([1, 1])
+            with mcol1:
+                bar = go.Figure()
+                bar.add_trace(go.Bar(
+                    name="Physics (Paris Law)", x=["Next crack (+10 MGT)"],
+                    y=[ml.physics_next_crack_mm], marker_color="#2563eb",
+                ))
+                bar.add_trace(go.Bar(
+                    name="ML (RandomForest)", x=["Next crack (+10 MGT)"],
+                    y=[ml.predicted_next_crack_mm], marker_color="#ea580c",
+                ))
+                bar.update_layout(
+                    barmode="group", height=280, title="Next-Reading Forecast",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#1e293b", legend=dict(orientation="h", y=1.2),
+                    yaxis=dict(title="Crack length (mm)", gridcolor="#dbe3ec"),
+                )
+                st.plotly_chart(bar, width="stretch")
+            with mcol2:
+                agree_tone = ("safe" if ml.agreement_pct >= 80
+                              else "warn" if ml.agreement_pct >= 50 else "danger")
+                render_stat_grid([
+                    ("Physics Forecast", f"{ml.physics_next_crack_mm} mm", ""),
+                    ("ML Forecast", f"{ml.predicted_next_crack_mm} mm", "accent"),
+                    ("Physics vs ML Agreement", f"{ml.agreement_pct}%", agree_tone),
+                    ("Empirical Rate (full history)",
+                     f"{empirical_rate} mm/MGT" if empirical_rate is not None else "n/a", ""),
+                    ("ML Model Accuracy (MAE)", f"\u00b1{ml.model_mae_mm} mm", ""),
+                    ("Model Trained On", f"{ml.training_samples:,} samples", ""),
+                ])
+            recommendation_box(
+                ml.verdict,
+                level="safe" if ml.agreement_pct >= 80 else
+                      ("info" if ml.agreement_pct >= 50 else "danger"),
+                label="ML Cross-Check Verdict",
+            )
+            st.markdown(
+                '<span class="rb-sim-badge">REAL ML</span> RandomForestRegressor trained '
+                "live on synthetic multi-cycle histories. In production this same model "
+                "retrains on real RDSO USFD archives \u2014 the code path is identical.",
+                unsafe_allow_html=True,
+            )
 
     with tab_csv:
         st.write("CSV columns required: `track_id, inspection_date, crack_length_mm, mgt_cumulative`")
@@ -141,17 +207,33 @@ def render() -> None:
             try:
                 df_in = pd.read_csv(uploaded)
                 results_df = analyse_uploaded_csv(df_in, rail_grade=csv_grade)
-                st.success(f"Analysed {len(results_df)} track(s).")
+
+                # Run-on-run enhancement: fit empirical growth rate from EACH
+                # track's full history (uses every reading, not just the latest).
+                df_in_dt = df_in.copy()
+                df_in_dt["inspection_date"] = pd.to_datetime(
+                    df_in_dt["inspection_date"], errors="coerce")
+                empirical_rates = {}
+                for tid, grp in df_in_dt.groupby("track_id"):
+                    grp_sorted = grp.sort_values("inspection_date")
+                    empirical_rates[tid] = fit_empirical_growth_rate(grp_sorted)
+                results_df["empirical_rate_mm_per_mgt"] = results_df["track_id"].map(
+                    empirical_rates)
+
+                st.success(
+                    f"Analysed {len(results_df)} track(s) using full run-on-run history "
+                    f"(every reading, not just the latest)."
+                )
                 st.dataframe(results_df, width="stretch", hide_index=True)
 
                 fig = px.bar(
                     results_df, x="track_id", y="risk_score", color="risk_band",
-                    color_discrete_map={"HIGH": "#ff4d4f", "MEDIUM": "#f5b942", "LOW": "#2ecc71"},
+                    color_discrete_map={"HIGH": "#dc2626", "MEDIUM": "#d97706", "LOW": "#16a34a"},
                     title="Risk Score by Track",
                 )
                 fig.update_layout(
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#e7ecf5", xaxis=dict(gridcolor="#22304f"), yaxis=dict(gridcolor="#22304f"),
+                    font_color="#1e293b", xaxis=dict(gridcolor="#dbe3ec"), yaxis=dict(gridcolor="#dbe3ec"),
                 )
                 st.plotly_chart(fig, width="stretch")
             except ValueError as exc:
@@ -181,12 +263,12 @@ def render() -> None:
         fig_heat = go.Figure(data=go.Heatmap(
             z=[latest_per_track["risk_score"].tolist()],
             x=latest_per_track["track_id"].tolist(),
-            colorscale=[[0, "#2ecc71"], [0.5, "#f5b942"], [1, "#ff4d4f"]],
+            colorscale=[[0, "#16a34a"], [0.5, "#d97706"], [1, "#dc2626"]],
         ))
         fig_heat.update_layout(
             height=200, title="Track Risk Heatmap",
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#e7ecf5",
+            font_color="#1e293b",
         )
         st.plotly_chart(fig_heat, width="stretch")
 
