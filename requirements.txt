@@ -1,0 +1,10 @@
+streamlit>=1.36,<2.0
+opencv-python-headless>=4.9,<5.0
+plotly>=5.20,<6.0
+pandas>=2.1,<3.0
+numpy>=1.26,<2.0
+psutil>=5.9,<6.0
+folium>=0.16,<1.0
+streamlit-folium>=0.20,<1.0
+reportlab>=4.1,<5.0
+svglib>=1.5,<2.0
