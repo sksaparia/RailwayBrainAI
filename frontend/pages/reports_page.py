@@ -160,6 +160,46 @@ def _summary_text(kind: str, choice: str, df: pd.DataFrame) -> str:
     return f"This report covers {len(df)} record(s) for {choice}."
 
 
+def _matplotlib_distribution_png(distribution: dict, color_map: dict, title: str) -> io.BytesIO | None:
+    """
+    Render a polished distribution chart with matplotlib and return it as a
+    PNG buffer for embedding in the PDF. Produces a far nicer chart than the
+    basic ReportLab primitive (rounded bars, value labels, brand colours).
+    Returns None if matplotlib is unavailable so the PDF still builds.
+    """
+    if not distribution:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        cats = list(distribution.keys())
+        vals = list(distribution.values())
+        bar_colors = [color_map.get(c, "#2563eb") for c in cats]
+
+        fig, ax = plt.subplots(figsize=(6.2, 2.9), dpi=150)
+        bars = ax.bar(cats, vals, color=bar_colors, edgecolor="#ffffff", linewidth=0.6)
+        for b, v in zip(bars, vals):
+            ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
+                    str(v), ha="center", va="bottom", fontsize=10, fontweight="bold",
+                    color="#ffffff")
+        ax.set_title(title, fontsize=11, fontweight="bold", color="#ffffff")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.tick_params(colors="#ffffff")
+        ax.set_ylim(0, max(vals) * 1.25 if vals else 1)
+        fig.tight_layout()
+
+        png = io.BytesIO()
+        fig.savefig(png, format="png", bbox_inches="tight")
+        plt.close(fig)
+        png.seek(0)
+        return png
+    except Exception:
+        return None
+
+
 def _bar_chart_drawing(distribution: dict, color_map: dict) -> Drawing:
     """Small embedded bar chart of a category distribution (status/severity/risk band)."""
     d = Drawing(420, 160)
@@ -173,7 +213,7 @@ def _bar_chart_drawing(distribution: dict, color_map: dict) -> Drawing:
     chart.data = [values]
     chart.categoryAxis.categoryNames = categories
     chart.valueAxis.valueMin = 0
-    chart.bars[0].fillColor = colors.HexColor("#ff7a1a")
+    chart.bars[0].fillColor = colors.HexColor("#ea580c")
     for i, cat in enumerate(categories):
         hex_color = color_map.get(cat)
         if hex_color:
@@ -183,16 +223,16 @@ def _bar_chart_drawing(distribution: dict, color_map: dict) -> Drawing:
 
 
 DIST_COLOR_MAPS = {
-    "fatigue": {"SAFE": "#2ecc71", "WARNING": "#f5b942", "DROWSY": "#ff4d4f", "UNKNOWN": "#3fa9f5"},
-    "inspection": {"HIGH": "#ff4d4f", "MEDIUM": "#f5b942", "LOW": "#2ecc71"},
-    "tamper": {"HIGH": "#ff4d4f", "MEDIUM": "#f5b942", "LOW": "#2ecc71"},
-    "logs": {"ERROR": "#ff4d4f", "WARNING": "#f5b942", "INFO": "#3fa9f5"},
+    "fatigue": {"SAFE": "#16a34a", "WARNING": "#d97706", "DROWSY": "#dc2626", "UNKNOWN": "#2563eb"},
+    "inspection": {"HIGH": "#dc2626", "MEDIUM": "#d97706", "LOW": "#16a34a"},
+    "tamper": {"HIGH": "#dc2626", "MEDIUM": "#d97706", "LOW": "#16a34a"},
+    "logs": {"ERROR": "#dc2626", "WARNING": "#d97706", "INFO": "#2563eb"},
 }
 
 
 def _footer(canvas, doc) -> None:
     canvas.saveState()
-    canvas.setStrokeColor(colors.HexColor("#cccccc"))
+    canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
     canvas.line(18 * mm, 16 * mm, A4[0] - 18 * mm, 16 * mm)
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(colors.grey)
@@ -207,8 +247,8 @@ def _build_pdf_report(title: str, df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=24 * mm)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("RBTitle", parent=styles["Title"], textColor=colors.HexColor("#16223f"))
-    heading_style = ParagraphStyle("RBHeading", parent=styles["Heading2"], textColor=colors.HexColor("#16223f"),
+    title_style = ParagraphStyle("RBTitle", parent=styles["Title"], textColor=colors.HexColor("#ffffff"))
+    heading_style = ParagraphStyle("RBHeading", parent=styles["Heading2"], textColor=colors.HexColor("#ffffff"),
                                     spaceBefore=10, spaceAfter=6)
     meta_style = ParagraphStyle("RBMeta", parent=styles["Normal"], textColor=colors.grey, fontSize=9)
     body_style = ParagraphStyle("RBBody", parent=styles["Normal"], fontSize=9.5, leading=13)
@@ -254,19 +294,27 @@ def _build_pdf_report(title: str, df: pd.DataFrame) -> bytes:
     elements.append(Paragraph("Statistics", heading_style))
     stat_table = Table([[label, value] for label, value in stats], colWidths=[220, 200])
     stat_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f2f4f8")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
         ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
         ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     elements.append(stat_table)
 
-    # --- Graph ---
+    # --- Graph (matplotlib PNG, falls back to ReportLab primitive) ---
     if distribution:
         elements.append(Paragraph("Distribution", heading_style))
-        elements.append(_bar_chart_drawing(distribution, DIST_COLOR_MAPS.get(kind, {})))
+        png = _matplotlib_distribution_png(
+            distribution, DIST_COLOR_MAPS.get(kind, {}),
+            title=f"{title} \u2014 Category Distribution",
+        )
+        if png is not None:
+            from reportlab.platypus import Image as RLImage
+            elements.append(RLImage(png, width=400, height=185))
+        else:
+            elements.append(_bar_chart_drawing(distribution, DIST_COLOR_MAPS.get(kind, {})))
 
     # --- Recommendations ---
     recos = _top_recommendations(kind, df)
@@ -290,11 +338,11 @@ def _build_pdf_report(title: str, df: pd.DataFrame) -> bytes:
         data = [list(display_df.columns)] + display_df.values.tolist()
         table = Table(data, repeatRows=1)
         table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#16223f")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ffffff")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f4f8")]),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f5f9")]),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]))
         elements.append(table)
@@ -348,9 +396,9 @@ def render() -> None:
             df_f = pd.DataFrame([dict(r) for r in fatigue_rows])
             fig = px.pie(df_f, names="status", values="c", title="Driver Status Distribution",
                          color="status",
-                         color_discrete_map={"SAFE": "#2ecc71", "WARNING": "#f5b942",
-                                              "DROWSY": "#ff4d4f", "UNKNOWN": "#3fa9f5"})
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e7ecf5")
+                         color_discrete_map={"SAFE": "#16a34a", "WARNING": "#d97706",
+                                              "DROWSY": "#dc2626", "UNKNOWN": "#2563eb"})
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b")
             st.plotly_chart(fig, width="stretch")
         else:
             st.info("No RailVision data yet.")
@@ -359,8 +407,8 @@ def render() -> None:
             df_t = pd.DataFrame([dict(r) for r in tamper_rows])
             fig = px.pie(df_t, names="severity", values="c", title="Tamper Severity Distribution",
                          color="severity",
-                         color_discrete_map={"HIGH": "#ff4d4f", "MEDIUM": "#f5b942", "LOW": "#2ecc71"})
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e7ecf5")
+                         color_discrete_map={"HIGH": "#dc2626", "MEDIUM": "#d97706", "LOW": "#16a34a"})
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b")
             st.plotly_chart(fig, width="stretch")
         else:
             st.info("No SmartSeal data yet.")
@@ -369,8 +417,8 @@ def render() -> None:
             df_r = pd.DataFrame([dict(r) for r in risk_rows])
             fig = px.pie(df_r, names="band", values="c", title="Track Risk Distribution",
                          color="band",
-                         color_discrete_map={"HIGH": "#ff4d4f", "MEDIUM": "#f5b942", "LOW": "#2ecc71"})
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e7ecf5")
+                         color_discrete_map={"HIGH": "#dc2626", "MEDIUM": "#d97706", "LOW": "#16a34a"})
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b")
             st.plotly_chart(fig, width="stretch")
         else:
             st.info("No TrackSentinel data yet.")
