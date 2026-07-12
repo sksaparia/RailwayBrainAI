@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database.db_manager import init_db  # noqa: E402
 from backend.database.seed_data import seed_all  # noqa: E402
-from frontend.ui_helpers import brand_header, footer, load_css, load_logo_svg, page_meta_bar  # noqa: E402
+from frontend.ui_helpers import footer, load_css, load_logo_svg, page_meta_bar  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("railwaybrain.app")
@@ -104,7 +104,6 @@ def main() -> None:
     _bootstrap()
 
     page = _sidebar_nav()
-    brand_header()
     page_meta_bar(page, MODULE_DESCRIPTIONS.get(page, ""))
 
     if page == "Dashboard":
