@@ -83,6 +83,56 @@ def _compute_ai_health_score() -> tuple[int, str, str]:
     return score, "Critical \u2014 Immediate Review Needed", "danger"
 
 
+def _network_risk_index() -> dict:
+    """
+    A single 0-100 Network Risk Index for the whole railway network, built
+    transparently from each module's live contribution. Higher = more risk.
+    Every point is traceable to a specific module and a specific query, so
+    the number is auditable rather than a black box.
+    Returns a dict with the total, the band, and the per-module breakdown.
+    """
+    # RailVision contribution (max 34): drowsy + warning driver events today
+    today = datetime.utcnow().date().isoformat()
+    drowsy_today = _count(
+        f"SELECT COUNT(*) FROM fatigue_events WHERE status='DROWSY' AND date(created_at)=date('{today}')")
+    warning_today = _count(
+        f"SELECT COUNT(*) FROM fatigue_events WHERE status='WARNING' AND date(created_at)=date('{today}')")
+    railvision_pts = min(34, drowsy_today * 12 + warning_today * 4)
+
+    # TrackSentinel contribution (max 33): high + medium risk tracks
+    high_tracks = _count("SELECT COUNT(*) FROM inspection_results WHERE risk_score >= 70")
+    med_tracks = _count(
+        "SELECT COUNT(*) FROM inspection_results WHERE risk_score >= 40 AND risk_score < 70")
+    tracksentinel_pts = min(33, high_tracks * 9 + med_tracks * 3)
+
+    # SmartSeal contribution (max 33): unresolved tamper events by severity
+    high_tamper = _count(
+        "SELECT COUNT(*) FROM tamper_events WHERE resolved=0 AND severity='HIGH'")
+    other_tamper = _count(
+        "SELECT COUNT(*) FROM tamper_events WHERE resolved=0 AND severity!='HIGH'")
+    smartseal_pts = min(33, high_tamper * 11 + other_tamper * 4)
+
+    total = int(min(100, railvision_pts + tracksentinel_pts + smartseal_pts))
+
+    if total >= 60:
+        band, tone = "CRITICAL", "danger"
+    elif total >= 30:
+        band, tone = "ELEVATED", "warn"
+    else:
+        band, tone = "NORMAL", "safe"
+
+    return {
+        "total": total,
+        "band": band,
+        "tone": tone,
+        "modules": {
+            "RailVision AI": railvision_pts,
+            "TrackSentinel AI": tracksentinel_pts,
+            "SmartSeal AI": smartseal_pts,
+        },
+    }
+
+
 def _top_recommendation() -> tuple[str, str]:
     """Picks the single most urgent recommendation across all three
     modules to surface on the dashboard. Returns (text, level)."""
@@ -124,6 +174,45 @@ def _top_recommendation() -> tuple[str, str]:
 def render() -> None:
     section_title("Enterprise Operations Dashboard")
 
+    # --- Executive impact strip (for the Adani / investor pitch) ---------
+    # These are the documented annual-impact figures from the RailwayBrain AI
+    # proposal, shown as the platform's headline value. Clearly framed as
+    # full-deployment projections, not live demo measurements.
+    st.markdown(
+        """
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+        gap:10px;margin:4px 0 10px 0;">
+          <div class="rb-card" style="text-align:center;">
+            <div class="rb-card-label">Projected Annual Impact</div>
+            <div class="rb-card-value accent">&#8377;13,790 Cr</div>
+            <div class="rb-card-sub">at full 8-module deployment</div>
+          </div>
+          <div class="rb-card" style="text-align:center;">
+            <div class="rb-card-label">Lives Protected / Year</div>
+            <div class="rb-card-value">250+</div>
+            <div class="rb-card-sub">accident + SPAD prevention</div>
+          </div>
+          <div class="rb-card" style="text-align:center;">
+            <div class="rb-card-label">Railway Proposals</div>
+            <div class="rb-card-value">3</div>
+            <div class="rb-card-sub">In Process on IR portal</div>
+          </div>
+          <div class="rb-card" style="text-align:center;">
+            <div class="rb-card-label">Deployment Cost</div>
+            <div class="rb-card-value">&#8377;0</div>
+            <div class="rb-card-sub">open-source software stack</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Impact figures are full-deployment projections from the RailwayBrain AI "
+        "proposal (sourced from CAG / Railway Budget / Ministry data), not live demo "
+        "measurements. The live operational metrics below are computed from this session."
+    )
+    st.markdown("<br/>", unsafe_allow_html=True)
+
     today = datetime.utcnow().date().isoformat()
 
     total_alerts_today = _count(
@@ -153,6 +242,77 @@ def render() -> None:
     candidates = [t for t in [last_fatigue, last_tamper, last_track] if t]
     last_analysis = max(candidates) if candidates else None
 
+    # --- Network Risk Index: the single headline number for the pitch ----
+    st.markdown("<br/>", unsafe_allow_html=True)
+    section_title("Network Risk Index \u2014 Live Composite Across All Modules")
+    nri = _network_risk_index()
+
+    nri_col1, nri_col2 = st.columns([1, 1])
+    with nri_col1:
+        gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=nri["total"],
+            title={"text": f"Network Risk Index \u2014 {nri['band']}",
+                   "font": {"color": "#1e293b", "size": 15}},
+            number={"font": {"color": "#ea580c", "size": 46}, "suffix": "/100"},
+            gauge={
+                "axis": {"range": [0, 100], "tickcolor": "#64748b"},
+                "bar": {"color": "#ea580c"},
+                "bgcolor": "#ffffff",
+                "borderwidth": 1, "bordercolor": "#dbe3ec",
+                "steps": [
+                    {"range": [0, 30], "color": "rgba(46,204,113,0.35)"},
+                    {"range": [30, 60], "color": "rgba(245,185,66,0.35)"},
+                    {"range": [60, 100], "color": "rgba(255,77,79,0.35)"},
+                ],
+            },
+        ))
+        gauge.update_layout(height=280, margin=dict(l=20, r=20, t=50, b=10),
+                            paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b")
+        st.plotly_chart(gauge, width="stretch")
+
+    with nri_col2:
+        modules = list(nri["modules"].keys())
+        values = list(nri["modules"].values())
+        radar = go.Figure()
+        radar.add_trace(go.Scatterpolar(
+            r=values + [values[0]],
+            theta=modules + [modules[0]],
+            fill="toself",
+            fillcolor="rgba(255,122,26,0.25)",
+            line=dict(color="#ea580c", width=2),
+            name="Risk contribution",
+        ))
+        radar.update_layout(
+            height=280, margin=dict(l=30, r=30, t=40, b=20),
+            title={"text": "Per-Module Risk Contribution", "font": {"color": "#1e293b", "size": 14}},
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#1e293b",
+            polar=dict(
+                bgcolor="rgba(22,34,63,0.4)",
+                radialaxis=dict(visible=True, range=[0, 35], gridcolor="#dbe3ec",
+                                tickfont=dict(color="#64748b", size=9)),
+                angularaxis=dict(gridcolor="#dbe3ec", tickfont=dict(color="#1e293b", size=11)),
+            ),
+        )
+        st.plotly_chart(radar, width="stretch")
+
+    # Transparent point-by-point breakdown ("every point is traceable")
+    render_stat_grid([
+        ("Network Risk Index", f"{nri['total']}/100", nri["tone"]),
+        ("Risk Band", nri["band"], nri["tone"]),
+        ("RailVision AI adds", f"+{nri['modules']['RailVision AI']} pts",
+         "danger" if nri["modules"]["RailVision AI"] > 0 else "safe"),
+        ("TrackSentinel AI adds", f"+{nri['modules']['TrackSentinel AI']} pts",
+         "danger" if nri["modules"]["TrackSentinel AI"] > 0 else "safe"),
+        ("SmartSeal AI adds", f"+{nri['modules']['SmartSeal AI']} pts",
+         "danger" if nri["modules"]["SmartSeal AI"] > 0 else "safe"),
+    ])
+    st.caption(
+        "Every point in the Network Risk Index is traceable to a specific module "
+        "and a specific live database query \u2014 no black-box scoring."
+    )
+
     st.markdown("<br/>", unsafe_allow_html=True)
     render_stat_grid([
         ("AI Health Score", f"{health_score}/100", health_tone),
@@ -178,28 +338,28 @@ def render() -> None:
         with gauge1:
             fig_cpu = go.Figure(go.Indicator(
                 mode="gauge+number", value=cpu,
-                title={"text": "CPU %", "font": {"color": "#e7ecf5", "size": 14}},
-                number={"font": {"color": "#ff7a1a"}},
-                gauge={"axis": {"range": [0, 100], "tickcolor": "#9aa8c2"},
-                       "bar": {"color": "#ff7a1a"},
-                       "bgcolor": "#16223f",
-                       "borderwidth": 1, "bordercolor": "#22304f"},
+                title={"text": "CPU %", "font": {"color": "#1e293b", "size": 14}},
+                number={"font": {"color": "#ea580c"}},
+                gauge={"axis": {"range": [0, 100], "tickcolor": "#64748b"},
+                       "bar": {"color": "#ea580c"},
+                       "bgcolor": "#ffffff",
+                       "borderwidth": 1, "bordercolor": "#dbe3ec"},
             ))
             fig_cpu.update_layout(height=180, margin=dict(l=10, r=10, t=30, b=10),
-                                   paper_bgcolor="rgba(0,0,0,0)", font_color="#e7ecf5")
+                                   paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b")
             st.plotly_chart(fig_cpu, width="stretch")
         with gauge2:
             fig_mem = go.Figure(go.Indicator(
                 mode="gauge+number", value=mem,
-                title={"text": "Memory %", "font": {"color": "#e7ecf5", "size": 14}},
-                number={"font": {"color": "#3fa9f5"}},
-                gauge={"axis": {"range": [0, 100], "tickcolor": "#9aa8c2"},
-                       "bar": {"color": "#3fa9f5"},
-                       "bgcolor": "#16223f",
-                       "borderwidth": 1, "bordercolor": "#22304f"},
+                title={"text": "Memory %", "font": {"color": "#1e293b", "size": 14}},
+                number={"font": {"color": "#2563eb"}},
+                gauge={"axis": {"range": [0, 100], "tickcolor": "#64748b"},
+                       "bar": {"color": "#2563eb"},
+                       "bgcolor": "#ffffff",
+                       "borderwidth": 1, "bordercolor": "#dbe3ec"},
             ))
             fig_mem.update_layout(height=180, margin=dict(l=10, r=10, t=30, b=10),
-                                   paper_bgcolor="rgba(0,0,0,0)", font_color="#e7ecf5")
+                                   paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b")
             st.plotly_chart(fig_mem, width="stretch")
         st.markdown(
             f'<div class="rb-card-sub">Live server time (UTC): '
@@ -225,12 +385,12 @@ def render() -> None:
             "SmartSeal Alerts": [tamper_map.get(d, 0) for d in days],
         })
         fig = px.line(df, x="date", y=["RailVision Alerts", "SmartSeal Alerts"],
-                       color_discrete_sequence=["#ff7a1a", "#3fa9f5"])
+                       color_discrete_sequence=["#ea580c", "#2563eb"])
         fig.update_layout(
             height=250, margin=dict(l=10, r=10, t=10, b=10),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#e7ecf5", legend=dict(orientation="h", y=1.15),
-            xaxis=dict(gridcolor="#22304f"), yaxis=dict(gridcolor="#22304f"),
+            font_color="#1e293b", legend=dict(orientation="h", y=1.15),
+            xaxis=dict(gridcolor="#dbe3ec"), yaxis=dict(gridcolor="#dbe3ec"),
         )
         st.plotly_chart(fig, width="stretch")
         st.markdown('</div>', unsafe_allow_html=True)
