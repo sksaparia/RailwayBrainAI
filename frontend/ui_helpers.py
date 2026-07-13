@@ -206,4 +206,3 @@ def gauge_chart(value: float, title: str, color: str = "#ea580c", max_value: flo
         paper_bgcolor="rgba(0,0,0,0)", font_color="#1e293b",
     )
     return fig
-
