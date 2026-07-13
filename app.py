@@ -74,11 +74,11 @@ def _sidebar_nav() -> str:
     with st.sidebar:
         logo_svg = load_logo_svg()
         st.markdown(
-            f'<div style="text-align:center; padding: 6px 0 14px 0;">'
-            f'<div style="width:96px;height:96px;margin:0 auto;" class="rb-logo-wrap">{logo_svg}</div>'
-            f'<div class="rb-brand-title" style="margin-top:8px;">RAILWAYBRAIN'
+            f'<div style="text-align:center; padding: 10px 8px 14px 8px;">'
+            f'<div style="width:64px;height:64px;margin:0 auto;" class="rb-logo-wrap">{logo_svg}</div>'
+            f'<div class="rb-brand-title" style="margin-top:8px;font-size:1.1rem;letter-spacing:0.08em;">RAILWAYBRAIN'
             f'<span class="accent"> AI</span></div>'
-            f'<div class="rb-brand-sub">Indian Railways \u2022 AI Platform</div>'
+            f'<div class="rb-brand-sub" style="font-size:0.7rem;margin-top:3px;">Indian Railways \u2022 AI Platform</div>'
             f"</div>",
             unsafe_allow_html=True,
         )
