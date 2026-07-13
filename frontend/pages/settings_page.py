@@ -55,18 +55,45 @@ def render() -> None:
             st.rerun()
 
     with col2:
-        st.caption("Export Database")
+        st.caption("Backup & Restore Database")
         if os.path.exists(DB_PATH):
             with open(DB_PATH, "rb") as f:
                 db_bytes = f.read()
             st.download_button(
-                "\U0001F4E5 Export Database (.db)",
+                "\U0001F4E5 Download Backup (.db)",
                 db_bytes,
                 file_name="railwaybrain.db",
                 mime="application/octet-stream",
             )
         else:
             st.caption("No database file found yet.")
+
+        # Restore: upload a previously-downloaded .db to survive Streamlit
+        # Cloud restarts (which wipe the ephemeral filesystem).
+        restore_file = st.file_uploader(
+            "Restore from backup (.db)", type=["db"], key="db_restore",
+            label_visibility="collapsed",
+        )
+        if restore_file is not None:
+            if st.button("\u267B\uFE0F Restore This Backup", key="do_restore"):
+                try:
+                    import sqlite3
+                    data = restore_file.read()
+                    # Validate it's a real SQLite file before overwriting
+                    if not data[:16].startswith(b"SQLite format 3"):
+                        st.error("That file is not a valid SQLite database.")
+                    else:
+                        with open(DB_PATH, "wb") as f:
+                            f.write(data)
+                        # Quick integrity check
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute("PRAGMA integrity_check;")
+                        conn.close()
+                        st.success("Database restored from backup. Reloading...")
+                        st.session_state.pop("rb_bootstrapped", None)
+                        st.rerun()
+                except Exception as exc:
+                    st.error(f"Restore failed: {exc}")
 
     with col3:
         st.caption("Import Sample Data")
